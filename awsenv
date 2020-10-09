@@ -1,0 +1,144 @@
+#!/bin/bash
+
+###
+# Script:     awsenv
+# Author:     Jeff VanSickle (vsx-gh)
+# Created:    20201009
+#
+# Script sources GPG-encrypted AWS credentials into envrionment variables.
+# Some design decisions forced by macOS' lack of newer Bash (so no ${var[0]^^}).
+#
+# REQUIREMENTS
+#  - Must have a GPG-encrypted credentials file, ideally formatted like boto3
+#    ~/.aws/credentials. This is nicer because it doesn't require [profile <name>]
+#    for non-default profiles like ~/.aws/config.
+#  - No hyphens in profile names. Can't set environment vars with this character.
+#
+# USAGE
+# . <path_to>/awsenv (initenv <credentials_file> | setdef <profile> | destroy)
+#
+# We want these environment variables in our current session, hence no sub-shells
+#
+# TODO:
+#   - Add session token support
+###
+
+usage () {
+    echo "Usage: $0 (initenv | setdef <profile> | destroy)"
+}
+
+function initawsenv {
+  echo "Initializing: Decrypting AWS credentials and setting environment variables."
+  all_env=()
+  aws_creds=$(gpg --decrypt "$aws_creds_file")
+  clean_creds=$(echo $aws_creds | tr ' ' '\n' | sed -n -E "/^\[.*\]/{s/\[(.*)\]/\1/;h;n;};/^[a-zA-Z]/{s/#.*//;G;s/([^ ]*) *= *(.*)\n(.*)/\3_\1='\2'/;p;}")
+
+  # Pull out 
+  export AWS_PROFILES=$(echo $aws_creds | tr ' ' '\n' | awk '/\[.*]/{flag=1; print}/\[.*\]/{flag=0} flag && NF' | tr -d '[\[\]]' | tr '\n' ' ')
+
+  for entry in $clean_creds
+    do
+      entry_arr=($(echo "$entry" | tr -d "'" | awk -F= '{print $1" "$2}'))
+      export $(echo ${entry_arr[0]} | tr '[:lower:]' '[:upper:]')=${entry_arr[1]}
+      all_env+=$(echo "${entry_arr[0]} " | tr '[:lower:]' '[:upper:]')
+    done
+
+  # Clean up 
+  unset entry
+  unset entry_arr
+  unset aws_creds
+  unset clean_creds
+
+  export AWS_VARS="${all_env[*]}"
+}
+
+# Switch your default profile variables to profile of your choice
+function setdef {
+  # Check that profile is in the list
+  for prof in $(printenv AWS_PROFILES)
+    do
+      if [ "$1" == "$prof" ]; then
+        valid_profile="true"
+      fi
+    done
+
+  echo "Found valid profile ${1}. Setting default to this profile."
+  
+  # Kick out if passed profile name is not available
+  if [ "$valid_profile" != "true" ]; then
+    echo "Specified profile name does not exist or environment is not initialized. Exiting."
+    return
+  fi
+
+  # Uppercase profile name
+  prof_upper=$(echo $1 | tr '[:lower:]' '[:upper:]')
+
+  # Set environment variable names
+  target_key_id="${prof_upper}_AWS_ACCESS_KEY_ID"
+  target_secret_key="${prof_upper}_AWS_SECRET_ACCESS_KEY"
+  target_region="${prof_upper}_REGION"
+  target_mfa="${prof_upper}_MFA_SERIAL"
+
+  # Set environment variables under names AWS and other tools expect
+  export AWS_ACCESS_KEY_ID=$(printenv $target_key_id)
+  export AWS_SECRET_ACCESS_KEY=$(printenv $target_secret_key)
+  export AWS_DEFAULT_REGION=$(printenv $target_region)
+
+  # Set other variables if they exist
+  if [ -n "$target_mfa" ]; then
+    export AWS_MFA_SERIAL=$(printenv $target_mfa)
+  fi
+}
+
+# Remove all environment vars that were set
+function destroy {
+  echo "Destroying: Unsetting environment variables"
+  # Clear out all our secret goodness
+  if [ -n "$AWS_VARS" ]; then
+    for aws_var in $AWS_VARS
+      do
+        unset $aws_var
+      done
+  else     # Oops, your init went wrong; try to salvage
+    for stray_var in $(env | grep 'AWS' | cut -d= -f1)
+      do
+        unset $stray_var
+      done 
+  fi
+    
+  # Clean up standard vars we may have set/linked
+  unset AWS_DEFAULT_REGION
+  unset AWS_ACCESS_KEY_ID
+  unset AWS_SECRET_ACCESS_KEY
+  unset AWS_MFA_SERIAL
+  unset AWS_VARS
+  unset AWS_PROFILES
+}
+
+if [ $# -eq 0 ]; then
+  usage
+fi
+
+# Tell script what to do
+env_action="$1"
+
+# getopts spawns a subshell and/or has trouble with variable scope
+# We want/need these variables in our current session
+if [ "$env_action" == "initenv" ]; then
+  if [ $# -eq 2 ]; then
+    if [ -f "$2" ]; then
+      aws_creds_file="$2"
+    else
+      echo "No such file. Using default ~/.aws/credentials.gpg"
+      aws_creds_file="$HOME/.aws/credentials.gpg"
+    fi
+  fi
+  initawsenv
+elif [ "$env_action" == "setdef" ]; then
+  defprof="$2"
+  setdef $defprof
+elif [ "$env_action" == "destroy" ]; then
+  destroy
+else
+  usage
+fi
