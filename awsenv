@@ -132,6 +132,8 @@ if [ "$env_action" == "initenv" ]; then
       echo "No such file. Using default ~/.aws/credentials.gpg"
       aws_creds_file="$HOME/.aws/credentials.gpg"
     fi
+  else
+    aws_creds_file="$HOME/.aws/credentials.gpg"
   fi
   initawsenv
 elif [ "$env_action" == "setdef" ]; then
