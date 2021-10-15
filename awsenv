@@ -82,10 +82,19 @@ function setdef {
   # Set environment variables under names AWS and other tools expect
   export AWS_ACCESS_KEY_ID=$(printenv $target_key_id)
   export AWS_SECRET_ACCESS_KEY=$(printenv $target_secret_key)
-  export AWS_DEFAULT_REGION=$(printenv $target_region)
+
+  # This is dumb.
+  if [ $(printenv "${target_region}") ]; then
+    export AWS_DEFAULT_REGION=$(printenv $target_region)
+  elif [ -n "${DEFAULT_REGION}" ]; then
+    echo "Have a default region. Setting...."
+    export AWS_DEFAULT_REGION=$(printenv DEFAULT_REGION)
+  else
+    export AWS_DEFAULT_REGION="us-east-1"                                                                                                      
+  fi
 
   # Set other variables if they exist
-  if [ -n "$target_mfa" ]; then
+  if [ $(printenv "${target_mfa}") ]; then
     export AWS_MFA_SERIAL=$(printenv $target_mfa)
   fi
 }
